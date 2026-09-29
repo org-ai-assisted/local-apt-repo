@@ -6,8 +6,9 @@
 ##   sudo bash experiment/apt-repo-messages-test.sh
 ##
 ## Everything lives under WORK (root-owned, 755 -> _apt-readable). apt is pointed
-## at an isolated sources file + lists/state dir, so the system's real apt state
-## is never touched; cleanup is a recursive remove of WORK.
+## at an isolated sources file + lists/state dir, so the system's real apt
+## sources/lists are never touched; cleanup is a recursive remove of WORK. The one
+## host change is installing prerequisites (dpkg-dev, apt-utils, gnupg) below.
 ##
 ## Kicksecure/helper-scripts environment assumed: the sample package is built with
 ## the `dummy-dependency` tool (helper-scripts), and cleanup uses `safe-rm`.

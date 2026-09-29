@@ -95,5 +95,7 @@ an attacker-owned directory safe -- that is on the operator.
 sudo bash experiment/apt-repo-messages-test.sh
 ```
 
-Runs entirely under `/srv/local-apt-repo-test` with an isolated apt lists/state
-dir, so the system's real apt configuration is never touched.
+Runs entirely under `/srv/local-apt-repo-test` with an isolated apt sources +
+lists/state dir, so the system's real apt *sources/lists* are never touched. It
+does install its prerequisites on the host (`dpkg-dev`, `apt-utils`, `gnupg`) --
+that is the one system-state change it makes.

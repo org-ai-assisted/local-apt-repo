@@ -57,7 +57,33 @@ if [[ "${repo_dir}" =~ [[:space:][:cntrl:]] ]]; then
    exit 1
 fi
 
+## A symlink REPO_DIR could point [trusted=yes] into attacker-controlled space.
+if [ -L "${repo_dir}" ]; then
+   printf '%s\n' "$0: ERROR: REPO_DIR must not be a symlink: ${repo_dir}" >&2
+   exit 1
+fi
+
 mkdir --parents -- "${repo_dir}"
+
+## [trusted=yes] installs from REPO_DIR as root with no signature check, so a repo
+## dir owned by, or writable by, a non-root user lets that user pre-seed or swap in
+## a package apt then installs as root. Check the CURRENT (pre-existing) mode BEFORE
+## the chmod below, or the chmod would mask a group/other-writable dir. (Ancestor
+## dirs must be root-owned too -- the trust contract in the header; a full ancestor
+## walk is out of scope here.)
+repo_stat="$(stat --format='%u %a' -- "${repo_dir}")"
+repo_owner="${repo_stat%% *}"
+repo_mode="${repo_stat##* }"
+if [ "${repo_owner}" -ne 0 ]; then
+   printf '%s\n' "$0: ERROR: REPO_DIR must be root-owned for [trusted=yes]: ${repo_dir}" >&2
+   exit 1
+fi
+if [ "$(( 0${repo_mode} & 022 ))" -ne 0 ]; then
+   printf '%s\n' "$0: ERROR: REPO_DIR must not be group/other-writable (mode ${repo_mode}): ${repo_dir}" >&2
+   exit 1
+fi
+
+## Now safe to ensure _apt can traverse/read it.
 chmod 755 -- "${repo_dir}"
 
 ## Stage any .deb arguments into the repo, world-readable.
