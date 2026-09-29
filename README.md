@@ -73,9 +73,10 @@ Three separate causes of "confusing messages", each with a fix:
 - `make-local-apt-repo.sh` -- build a clean, message-free local repo from a set
   of `.deb` files (the recommended recipe).
 - `experiment/apt-repo-messages-test.sh` -- the investigation harness: builds a
-  dummy package (via Kicksecure `helper-scripts`' `dummy-dependency` tool when
-  present, else `equivs-build`), then runs `apt-get update` across five configs
-  (A-E) in an isolated apt state and reports which messages each emits.
+  dummy package with the Kicksecure `helper-scripts` `dummy-dependency` tool, then
+  runs `apt-get update` across five configs (A-E) in an isolated apt state and
+  reports which messages each emits. Assumes the Kicksecure/helper-scripts
+  environment (`dummy-dependency`, `safe-rm`).
 
 ## Reproducing the investigation
 

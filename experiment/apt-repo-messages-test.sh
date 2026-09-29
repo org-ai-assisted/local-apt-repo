@@ -9,6 +9,9 @@
 ## at an isolated sources file + lists/state dir, so the system's real apt state
 ## is never touched; cleanup is a recursive remove of WORK.
 ##
+## Kicksecure/helper-scripts environment assumed: the sample package is built with
+## the `dummy-dependency` tool (helper-scripts), and cleanup uses `safe-rm`.
+##
 ## A failing `apt-get update` is a RESULT to capture, not an abort: every command
 ## whose non-zero exit is expected is guarded (if/else or `|| ...`), so errexit
 ## stays on without swallowing the results the harness exists to record.
@@ -21,12 +24,6 @@ shopt -s inherit_errexit
 shopt -s shift_verbose
 export LC_ALL=C
 
-## Portable demo: must run on a plain Debian box, so no Kicksecure-only helpers.
-## style-ok: no-safe-rm
-## style-ok: no-has
-## style-ok: allow-echo
-## style-ok: allow-apt-get
-
 WORK=/srv/local-apt-repo-test
 REPO="${WORK}/repo"
 LISTS="${WORK}/lists"
@@ -34,6 +31,8 @@ LOGDIR="${WORK}/logs"
 KEYDIR="${WORK}/keys"
 GNUPGHOME="${KEYDIR}/gnupg"
 export GNUPGHOME
+
+PKG=dummy-dependency-test
 
 declare -A RC     # per-variant apt-get update exit code (source of truth)
 
@@ -45,38 +44,21 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 ## --- clean slate ---------------------------------------------------------
-rm -rf "${WORK}"
+safe-rm --recursive --force -- "${WORK}"
 mkdir -p "${REPO}" "${LISTS}" "${LOGDIR}" "${KEYDIR}"
 chmod 755 "${WORK}" "${REPO}" "${LISTS}" "${LOGDIR}"
 
 ## --- deps: apt-ftparchive (apt-utils) + gnupg for the signed variant -----
 export DEBIAN_FRONTEND=noninteractive
 apt-get install -y --no-install-recommends apt-utils gnupg >/dev/null 2>&1 \
-   || echo "WARN: apt-utils/gnupg install had issues"
+   || printf '%s\n' "WARN: apt-utils/gnupg install had issues"
 
-## --- step 1: dummy .deb --------------------------------------------------
-## Prefer Kicksecure helper-scripts' dummy-dependency (a root wrapper around
-## equivs-build); fall back to equivs-build directly.
-hr "STEP 1: build dummy package"
-PKG=dummy-dependency-test
-if command -v dummy-dependency >/dev/null 2>&1; then
-   dummy-dependency --cache-only dependency-test
-   cp -v /var/lib/dummy-dependency/dummy-dependency-test_99_all.deb "${REPO}/"
-elif command -v equivs-build >/dev/null 2>&1; then
-   stub="${WORK}/${PKG}.equivs"
-   cat > "${stub}" <<EOF
-Package: ${PKG}
-Version: 1.0
-Architecture: all
-Maintainer: local-apt-repo test <test@example.com>
-Description: Dummy package for local apt repo testing
-EOF
-   ( cd "${WORK}" && equivs-build "${stub}" )
-   cp -v "${WORK}/${PKG}"_*_all.deb "${REPO}/"
-else
-   echo "ERROR: neither dummy-dependency nor equivs-build available" >&2
-   exit 1
-fi
+## --- step 1: dummy .deb via the helper-scripts dummy-dependency tool ------
+## `--cache-only` builds + caches the .deb and exits without installing; it lands
+## in an _apt-readable dir on purpose, the same reason REPO below is 755.
+hr "STEP 1: build dummy package (dummy-dependency --cache-only)"
+dummy-dependency --cache-only dependency-test
+cp -v /var/lib/dummy-dependency/dummy-dependency-test_99_all.deb "${REPO}/"
 chmod 644 "${REPO}"/*.deb
 
 ## --- step 2: flat repo indices ------------------------------------------
@@ -94,11 +76,14 @@ run_update() {
    local sl="${WORK}/sources-${name}.list"
    local ld="${LISTS}/${name}"
    printf '%s\n' "${line}" > "${sl}"
-   rm -rf "${ld}"; mkdir -p "${ld}/partial"; chmod 755 "${ld}" "${ld}/partial"
+   safe-rm --recursive --force -- "${ld}"
+   mkdir -p "${ld}/partial"
+   chmod 755 "${ld}" "${ld}/partial"
    hr "VARIANT ${name}: ${line}"
    local rc
    ## `if` condition suppresses errexit, so a refused repo (exit 100) is captured
-   ## rather than aborting the run.
+   ## rather than aborting the run. Plain `apt-get update` on purpose: it is the
+   ## literal command a user runs and whose messages this harness catalogs.
    if apt-get update \
       -o Dir::Etc::sourcelist="${sl}" \
       -o Dir::Etc::sourceparts="/dev/null" \
@@ -111,7 +96,7 @@ run_update() {
       rc=$?
    fi
    RC[${name}]="${rc}"
-   echo "exit=${rc}"
+   printf 'exit=%s\n' "${rc}"
    cat "${LOGDIR}/${name}.log"
    LAST_LD="${ld}"; LAST_SL="${sl}"
 }
@@ -139,10 +124,10 @@ Expire-Date: 0
 %commit
 EOF
 gpg --batch --gen-key "${KEYDIR}/keyparams" 2> "${LOGDIR}/gpg-gen.log" \
-   || { echo "gpg keygen FAILED"; cat "${LOGDIR}/gpg-gen.log"; }
+   || { printf '%s\n' "gpg keygen FAILED"; cat "${LOGDIR}/gpg-gen.log"; }
 gpg --export > "${KEYDIR}/local-test.gpg" 2>/dev/null
 ( cd "${REPO}" && gpg --batch --yes --clearsign -o InRelease Release 2> "${LOGDIR}/gpg-sign.log" ) \
-   || { echo "gpg sign FAILED"; cat "${LOGDIR}/gpg-sign.log"; }
+   || { printf '%s\n' "gpg sign FAILED"; cat "${LOGDIR}/gpg-sign.log"; }
 run_update E "deb [signed-by=${KEYDIR}/local-test.gpg] file:${REPO} ./"
 
 ## --- verify the package actually resolves under config E ----------------
