@@ -13,6 +13,8 @@
 ##   - [trusted=yes]        : apt 3.0 refuses an unsigned repo with a fatal E:
 ##   - plain `Packages`      : gz-only makes apt probe .xz/.bz2/.lzma and print Err:
 ##   - world-readable files  : else the `_apt` user cannot read them (N: note)
+## Zero-Err: assumes Acquire::Languages "none" (Kicksecure/Whonix default); a stock
+## apt also probes Translation-en and prints benign not-found Err: lines. See README.
 ##
 ## SECURITY: [trusted=yes] disables signature checking, so apt installs whatever
 ## is in REPO_DIR AS ROOT with no authentication. Point it ONLY at a path that is
@@ -44,16 +46,17 @@ if [ "$(id -u)" -ne 0 ]; then
    exit 1
 fi
 
-## REPO_DIR lands verbatim in a file: URI on a one-line sources.list entry.
-## Require an absolute path (apt rejects a relative file: URI) with no whitespace
-## or control characters (a space misparses the entry; a newline injects a second,
-## trusted, attacker-controlled apt source).
-if [ "${repo_dir#/}" = "${repo_dir}" ]; then
-   printf '%s\n' "$0: ERROR: REPO_DIR must be an absolute path: ${repo_dir}" >&2
+## REPO_DIR lands verbatim in a file: URI on a one-line sources.list entry, and apt
+## percent-decodes it. Restrict to a safe absolute path -- leading slash, only
+## [A-Za-z0-9._/-], no `//` or `..` component. This rejects whitespace and newlines
+## (source injection), `%` (percent-decode traversal PAST the ownership check below),
+## `#` (apt comment -> malformed entry), and a `//` prefix (invalid file: URI).
+if [[ ! "${repo_dir}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+   printf '%s\n' "$0: ERROR: REPO_DIR must be an absolute path using only [A-Za-z0-9._/-]: ${repo_dir}" >&2
    exit 1
 fi
-if [[ "${repo_dir}" =~ [[:space:][:cntrl:]] ]]; then
-   printf '%s\n' "$0: ERROR: REPO_DIR must not contain whitespace or control characters." >&2
+if [[ "${repo_dir}" == *//* || "${repo_dir}" == */../* || "${repo_dir}" == */.. ]]; then
+   printf '%s\n' "$0: ERROR: REPO_DIR must not contain '//' or a '..' component: ${repo_dir}" >&2
    exit 1
 fi
 
@@ -86,8 +89,14 @@ fi
 ## Now safe to ensure _apt can traverse/read it.
 chmod 755 -- "${repo_dir}"
 
-## Stage any .deb arguments into the repo, world-readable.
+## Stage any .deb arguments into the repo. Refuse a symlink argument: cp would
+## follow it as root and copy the target's content (e.g. /etc/shadow) into a
+## world-readable file.
 for deb in "$@"; do
+   if [ -L "${deb}" ]; then
+      printf '%s\n' "$0: ERROR: refusing a symlink .deb argument (cp would follow it): ${deb}" >&2
+      exit 1
+   fi
    cp --verbose -- "${deb}" "${repo_dir}/"
 done
 
@@ -95,18 +104,26 @@ if ! ls -- "${repo_dir}"/*.deb >/dev/null 2>&1; then
    printf '%s\n' "$0: ERROR: no .deb files in ${repo_dir} (pass some as arguments)." >&2
    exit 1
 fi
-chmod 644 -- "${repo_dir}"/*.deb
 
 ## Plain uncompressed Packages: a gz-only index makes apt probe Packages.xz /
 ## .bz2 / .lzma first and print an Err: for each before falling back.
 ( cd -- "${repo_dir}" && dpkg-scanpackages . /dev/null > Packages )
-chmod 644 -- "${repo_dir}/Packages"
 
-## Sanitize the basename to apt's sources.list.d run-parts charset and prefix it,
-## so the list filename can neither be silently skipped (a space / leading dot) nor
-## clobber a distro source (e.g. REPO_DIR=/srv/debian must not overwrite debian.list).
+## [trusted=yes] trusts these files: make them root-owned and world-readable so a
+## pre-existing non-root owner cannot rewrite the package apt installs as root, and
+## `_apt` can still read them.
+chown root:root -- "${repo_dir}"/*.deb "${repo_dir}/Packages"
+chmod 644 -- "${repo_dir}"/*.deb "${repo_dir}/Packages"
+
+## List filename: unique per FULL path (two dirs sharing a basename must not collide
+## and drop each other's entry) and bounded well under NAME_MAX. Prefixed so it
+## cannot clobber a distro source (e.g. REPO_DIR=/srv/debian vs debian.list), and
+## the basename is sanitized to apt's run-parts charset so it is never silently
+## skipped (a space / leading dot).
 repo_base="$(basename -- "${repo_dir}")"
-list_name="local-apt-repo-$(printf '%s' "${repo_base}" | tr -c 'A-Za-z0-9_.-' '_')"
+repo_base="${repo_base:0:40}"
+path_hash="$(printf '%s' "${repo_dir}" | sha256sum | cut -c1-12)"
+list_name="local-apt-repo-$(printf '%s' "${repo_base}" | tr -c 'A-Za-z0-9_.-' '_')-${path_hash}"
 list_file="/etc/apt/sources.list.d/${list_name}.list"
 printf 'deb [trusted=yes] file:%s ./\n' "${repo_dir}" > "${list_file}"
 

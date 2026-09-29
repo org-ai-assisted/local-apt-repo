@@ -137,25 +137,28 @@ Expire-Date: 0
 EOF
 gpg --batch --gen-key "${KEYDIR}/keyparams" 2> "${LOGDIR}/gpg-gen.log" \
    || { printf '%s\n' "gpg keygen FAILED"; cat "${LOGDIR}/gpg-gen.log"; }
-gpg --export > "${KEYDIR}/local-test.gpg" 2>/dev/null
+gpg --export > "${KEYDIR}/local-test.gpg" 2>/dev/null || true
 ( cd "${REPO}" && gpg --batch --yes --clearsign -o InRelease Release 2> "${LOGDIR}/gpg-sign.log" ) \
    || { printf '%s\n' "gpg sign FAILED"; cat "${LOGDIR}/gpg-sign.log"; }
 run_update E "deb [signed-by=${KEYDIR}/local-test.gpg] file:${REPO} ./"
 
 ## --- verify the package actually resolves under config E ----------------
+## `|| true`: informational verify; must not abort before the SUMMARY under errexit
+## if config E's repo did not resolve (e.g. signing setup failed earlier).
 hr "VERIFY: apt-cache policy + install --dry-run (config E)"
 apt-cache policy "${PKG}" \
    -o Dir::Etc::sourcelist="${LAST_SL}" \
    -o Dir::Etc::sourceparts="/dev/null" \
-   -o Dir::State::lists="${LAST_LD}" 2>&1
+   -o Dir::State::lists="${LAST_LD}" 2>&1 || true
 apt-get install --dry-run "${PKG}" \
    -o Dir::Etc::sourcelist="${LAST_SL}" \
    -o Dir::Etc::sourceparts="/dev/null" \
-   -o Dir::State::lists="${LAST_LD}" 2>&1
+   -o Dir::State::lists="${LAST_LD}" 2>&1 || true
 
 ## --- honest summary: pass/fail + noise per variant ----------------------
-## A variant is CLEAN only if rc=0 AND no E:/W:/N: line. E: is fatal, so counting
-## only W:/N: would report a hard failure as clean.
+## A variant is CLEAN only if rc=0 AND no E:/W:/N:/Err: line. E: is fatal; Err: is
+## the non-fatal probe noise (Packages.xz/.bz2/.lzma, Translation-en) the recipe
+## also aims to avoid -- counting only E:/W:/N: would call a noisy update clean.
 declare -A DESC=(
    [A]="bare flat repo, no Release, no trust"
    [B]="[trusted=yes], no Release"
@@ -167,7 +170,7 @@ hr "SUMMARY: per-variant result (rc = apt-get update exit code)"
 for v in A B C D E; do
    rc="${RC[${v}]:-?}"
    ## `|| true`: grep -c exits 1 when the count is 0, which errexit would abort on.
-   noise="$(grep -E -c '^[EWN]:' "${LOGDIR}/${v}.log" 2>/dev/null || true)"
+   noise="$(grep -E -c '^(Err:|[EWN]:)' "${LOGDIR}/${v}.log" 2>/dev/null || true)"
    noise="${noise:-0}"
    if [ "${rc}" = 0 ] && [ "${noise}" = 0 ]; then
       verdict="CLEAN"
@@ -175,6 +178,6 @@ for v in A B C D E; do
       verdict="NOT CLEAN"
    fi
    printf '>>> %s  rc=%s  msgs=%s  %-9s  (%s)\n' "${v}" "${rc}" "${noise}" "${verdict}" "${DESC[${v}]}"
-   grep -E '^[EWN]:' "${LOGDIR}/${v}.log" 2>/dev/null | sed 's/^/      /' || true
+   grep -E '^(Err:|[EWN]:)' "${LOGDIR}/${v}.log" 2>/dev/null | sed 's/^/      /' || true
 done
 hr "DONE"

@@ -32,6 +32,14 @@ The two `Ign:` lines are normal and harmless: apt looks for a signed `InRelease`
 and a `Release`, finds neither, and ignores them because the source is
 `[trusted=yes]`.
 
+This exact zero-`Err:` output assumes `Acquire::Languages "none"` (the
+Kicksecure/Whonix default, set in `/etc/apt/apt.conf.d/30usability-misc`). On a
+stock apt with the default language setting, `apt-get update` additionally probes
+`Translation-en` and prints benign `Err: File not found` lines for `en.xz`,
+`en.bz2`, ... -- the same not-found probe class as the compression variants below,
+harmless but noisy. Set `Acquire::Languages "none"` to silence them for a local
+flat repo.
+
 ## Why the naive recipe is noisy (or fails) on modern apt
 
 The classic advice (`dpkg-scanpackages . /dev/null | gzip > Packages.gz`, then a
