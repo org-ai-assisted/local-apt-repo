@@ -60,6 +60,11 @@ if [[ "${repo_dir}" == *//* || "${repo_dir}" == */../* || "${repo_dir}" == */.. 
    exit 1
 fi
 
+## Lexically normalize (strip a trailing slash and any /./), WITHOUT resolving
+## symlinks, so /srv/repo and /srv/repo/ map to one path -- otherwise they hash to
+## two different list files and apt warns "configured multiple times".
+repo_dir="$(realpath --no-symlinks --canonicalize-missing -- "${repo_dir}")"
+
 ## A symlink REPO_DIR could point [trusted=yes] into attacker-controlled space.
 if [ -L "${repo_dir}" ]; then
    printf '%s\n' "$0: ERROR: REPO_DIR must not be a symlink: ${repo_dir}" >&2
@@ -89,9 +94,22 @@ fi
 ## Now safe to ensure _apt can traverse/read it.
 chmod 755 -- "${repo_dir}"
 
-## Stage any .deb arguments into the repo. Refuse a symlink argument: cp would
-## follow it as root and copy the target's content (e.g. /etc/shadow) into a
-## world-readable file.
+## Refuse any pre-existing symlink among the repo's files before staging or indexing:
+## `cp` into a symlinked destination, `> Packages`, and the chown/chmod below would each
+## follow it and read/alter a file OUTSIDE the repo. The dir is root-owned and not
+## group/other-writable per the guard above, so only root could have placed one -- this
+## closes the footgun rather than assuming it did not happen.
+for existing in "${repo_dir}"/*.deb "${repo_dir}/Packages"; do
+   if [ -L "${existing}" ]; then
+      printf '%s\n' "$0: ERROR: refusing a symlink in REPO_DIR: ${existing}" >&2
+      exit 1
+   fi
+done
+
+## Stage any .deb arguments into the repo. Refuse a symlink argument: cp would follow
+## it as root and copy the target's content (e.g. /etc/shadow) into a world-readable
+## file. (A check/use race on an attacker-controlled ARGUMENT path is out of scope:
+## the tool runs as root on operator-supplied arguments, the same trust as the path.)
 for deb in "$@"; do
    if [ -L "${deb}" ]; then
       printf '%s\n' "$0: ERROR: refusing a symlink .deb argument (cp would follow it): ${deb}" >&2
@@ -112,7 +130,7 @@ fi
 ## [trusted=yes] trusts these files: make them root-owned and world-readable so a
 ## pre-existing non-root owner cannot rewrite the package apt installs as root, and
 ## `_apt` can still read them.
-chown root:root -- "${repo_dir}"/*.deb "${repo_dir}/Packages"
+chown --no-dereference root:root -- "${repo_dir}"/*.deb "${repo_dir}/Packages"
 chmod 644 -- "${repo_dir}"/*.deb "${repo_dir}/Packages"
 
 ## List filename: unique per FULL path (two dirs sharing a basename must not collide
