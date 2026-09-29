@@ -59,6 +59,17 @@ Three separate causes of "confusing messages", each with a fix:
    `N: Download is performed unsandboxed as root ... couldn't be accessed by
    user '_apt'`. Fix: keep the repo dir world-readable (e.g. `/srv/myrepo`, 755).
 
+## Security of `[trusted=yes]`
+
+`[trusted=yes]` turns off signature checking: apt installs whatever is in the repo
+dir **as root, unauthenticated**. Only point it at a path that is root-owned end to
+end (the repo dir and every ancestor). A repo dir that is attacker-owned, a symlink
+into attacker space, or under a non-sticky attacker-owned parent lets a local user
+stage a package apt then installs as root. For a shared or untrusted location, use
+the authenticated config below instead. `make-local-apt-repo.sh` requires an
+absolute, whitespace-free path and writes world-readable files, but it cannot make
+an attacker-owned directory safe -- that is on the operator.
+
 ## Two supported configs
 
 - **Throwaway / local only:** `[trusted=yes]`. No `Release`, no key needed.

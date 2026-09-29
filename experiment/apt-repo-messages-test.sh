@@ -24,6 +24,15 @@ shopt -s inherit_errexit
 shopt -s shift_verbose
 export LC_ALL=C
 
+## Created dirs 755, redirected files 644: under a restrictive caller umask a 700
+## WORK / 600 Packages would make `_apt` unable to read them, printing the N: note
+## on EVERY variant and falsely marking them all NOT CLEAN.
+umask 022
+
+## Plain `apt-get` on purpose: this harness demonstrates the literal command a user
+## runs and catalogs its messages; not a portability waiver.
+## style-ok: allow-apt-get
+
 WORK=/srv/local-apt-repo-test
 REPO="${WORK}/repo"
 LISTS="${WORK}/lists"
@@ -50,8 +59,9 @@ chmod 755 "${WORK}" "${REPO}" "${LISTS}" "${LOGDIR}"
 
 ## --- deps: apt-ftparchive (apt-utils) + gnupg for the signed variant -----
 export DEBIAN_FRONTEND=noninteractive
-apt-get install -y --no-install-recommends apt-utils gnupg >/dev/null 2>&1 \
-   || printf '%s\n' "WARN: apt-utils/gnupg install had issues"
+## dpkg-dev provides dpkg-scanpackages (step 2); apt-utils provides apt-ftparchive.
+apt-get install -y --no-install-recommends dpkg-dev apt-utils gnupg >/dev/null 2>&1 \
+   || printf '%s\n' "WARN: dpkg-dev/apt-utils/gnupg install had issues"
 
 ## --- step 1: dummy .deb via the helper-scripts dummy-dependency tool ------
 ## `--cache-only` builds + caches the .deb and exits without installing; it lands
@@ -67,6 +77,7 @@ chmod 644 "${REPO}"/*.deb
 hr "STEP 2: dpkg-scanpackages"
 ( cd "${REPO}" && dpkg-scanpackages . /dev/null > Packages 2> "${LOGDIR}/scan.stderr" )
 gzip -9c "${REPO}/Packages" > "${REPO}/Packages.gz"
+chmod 644 "${REPO}/Packages" "${REPO}/Packages.gz"
 cat "${LOGDIR}/scan.stderr"
 ls -l "${REPO}"
 

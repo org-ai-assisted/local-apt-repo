@@ -12,10 +12,16 @@
 ## noise. The three things that keep it quiet:
 ##   - [trusted=yes]        : apt 3.0 refuses an unsigned repo with a fatal E:
 ##   - plain `Packages`      : gz-only makes apt probe .xz/.bz2/.lzma and print Err:
-##   - world-readable dir    : else the `_apt` user cannot read it (N: note)
+##   - world-readable files  : else the `_apt` user cannot read them (N: note)
 ##
-## For an AUTHENTICATED repo instead, sign a Release into InRelease and use
-## [signed-by=<keyring>] -- see experiment/apt-repo-messages-test.sh variant E.
+## SECURITY: [trusted=yes] disables signature checking, so apt installs whatever
+## is in REPO_DIR AS ROOT with no authentication. Point it ONLY at a path that is
+## root-owned end to end (REPO_DIR and every ancestor). A REPO_DIR that is
+## attacker-owned, a symlink into attacker space, or under a non-sticky
+## attacker-owned parent lets a local user stage a package that apt then installs
+## as root. For an untrusted or shared location, use the AUTHENTICATED recipe
+## instead (sign a Release into InRelease + [signed-by=<keyring>]) -- see
+## experiment/apt-repo-messages-test.sh variant E.
 
 set -o errexit
 set -o nounset
@@ -25,6 +31,11 @@ shopt -s inherit_errexit
 shopt -s shift_verbose
 export LC_ALL=C
 
+## Created dirs 755 and redirected files 644, so `_apt` can read the repo even
+## when the caller's umask is restrictive (a 700 dir / 600 Packages re-triggers
+## the very "couldn't be accessed by user '_apt'" note this tool avoids).
+umask 022
+
 repo_dir="${1:-/srv/myrepo}"
 shift || true
 
@@ -33,12 +44,23 @@ if [ "$(id -u)" -ne 0 ]; then
    exit 1
 fi
 
-## 755 so the unprivileged `_apt` user can read the repo (avoids the
-## "couldn't be accessed by user '_apt'" note).
+## REPO_DIR lands verbatim in a file: URI on a one-line sources.list entry.
+## Require an absolute path (apt rejects a relative file: URI) with no whitespace
+## or control characters (a space misparses the entry; a newline injects a second,
+## trusted, attacker-controlled apt source).
+if [ "${repo_dir#/}" = "${repo_dir}" ]; then
+   printf '%s\n' "$0: ERROR: REPO_DIR must be an absolute path: ${repo_dir}" >&2
+   exit 1
+fi
+if [[ "${repo_dir}" =~ [[:space:][:cntrl:]] ]]; then
+   printf '%s\n' "$0: ERROR: REPO_DIR must not contain whitespace or control characters." >&2
+   exit 1
+fi
+
 mkdir --parents -- "${repo_dir}"
 chmod 755 -- "${repo_dir}"
 
-## Stage any .deb arguments into the repo.
+## Stage any .deb arguments into the repo, world-readable.
 for deb in "$@"; do
    cp --verbose -- "${deb}" "${repo_dir}/"
 done
@@ -47,12 +69,19 @@ if ! ls -- "${repo_dir}"/*.deb >/dev/null 2>&1; then
    printf '%s\n' "$0: ERROR: no .deb files in ${repo_dir} (pass some as arguments)." >&2
    exit 1
 fi
+chmod 644 -- "${repo_dir}"/*.deb
 
 ## Plain uncompressed Packages: a gz-only index makes apt probe Packages.xz /
 ## .bz2 / .lzma first and print an Err: for each before falling back.
 ( cd -- "${repo_dir}" && dpkg-scanpackages . /dev/null > Packages )
+chmod 644 -- "${repo_dir}/Packages"
 
-list_file="/etc/apt/sources.list.d/$(basename -- "${repo_dir}").list"
+## Sanitize the basename to apt's sources.list.d run-parts charset and prefix it,
+## so the list filename can neither be silently skipped (a space / leading dot) nor
+## clobber a distro source (e.g. REPO_DIR=/srv/debian must not overwrite debian.list).
+repo_base="$(basename -- "${repo_dir}")"
+list_name="local-apt-repo-$(printf '%s' "${repo_base}" | tr -c 'A-Za-z0-9_.-' '_')"
+list_file="/etc/apt/sources.list.d/${list_name}.list"
 printf 'deb [trusted=yes] file:%s ./\n' "${repo_dir}" > "${list_file}"
 
 printf '%s\n' "$0: INFO: wrote ${list_file}:"
