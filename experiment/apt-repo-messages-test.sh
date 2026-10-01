@@ -61,8 +61,10 @@ chmod 755 "${WORK}" "${REPO}" "${LISTS}" "${LOGDIR}"
 ## --- deps: apt-ftparchive (apt-utils) + gnupg for the signed variant -----
 export DEBIAN_FRONTEND=noninteractive
 ## dpkg-dev provides dpkg-scanpackages (step 2); apt-utils provides apt-ftparchive.
-apt-get install -y --no-install-recommends dpkg-dev apt-utils gnupg >/dev/null 2>&1 \
-   || printf '%s\n' "WARN: dpkg-dev/apt-utils/gnupg install had issues"
+## Hard prerequisites: let a failed install abort loudly under errexit, not a WARN
+## that limps into a later, more confusing scanpackages/ftparchive failure. Only
+## stdout is muted; apt's own error stays on stderr.
+apt-get install -y --no-install-recommends dpkg-dev apt-utils gnupg >/dev/null
 
 ## --- step 1: dummy .deb via the helper-scripts dummy-dependency tool ------
 ## `--cache-only` builds + caches the .deb and exits without installing; it lands
