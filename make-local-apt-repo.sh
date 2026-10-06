@@ -43,18 +43,27 @@ shift || true
 
 ## REPO_DIR lands verbatim in a file: URI on a one-line sources.list entry, and apt
 ## percent-decodes it. Restrict to a safe absolute path -- leading slash, only
-## [A-Za-z0-9._/-], no `//` or `..` component. This rejects whitespace and newlines
-## (source injection), `%` (percent-decode traversal PAST the ownership check below),
-## `#` (apt comment -> malformed entry), and a `//` prefix (invalid file: URI).
+## [A-Za-z0-9._/-], no `//`, `.` or `..` component. This rejects whitespace and
+## newlines (source injection), `%` (percent-decode traversal PAST the ownership check
+## below), `#` (apt comment -> malformed entry), and a `//` prefix (invalid file: URI).
 ## A pure string check with no privilege or filesystem dependency, so it runs before
 ## the root check and is exercisable standalone (test/test-repo-dir-validation.sh).
 if [[ ! "${repo_dir}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
    printf '%s\n' "$0: ERROR: REPO_DIR must be an absolute path using only [A-Za-z0-9._/-]: ${repo_dir}" >&2
    exit 1
 fi
-if [[ "${repo_dir}" == *//* || "${repo_dir}" == */../* || "${repo_dir}" == */.. ]]; then
-   printf '%s\n' "$0: ERROR: REPO_DIR must not contain '//' or a '..' component: ${repo_dir}" >&2
+## A lone `.` component is rejected too: realpath collapses it (`/.` -> `/`, `/x/.` ->
+## `/x`), and `/.` would otherwise defeat the bare-root rejection and index a repo at /.
+if [[ "${repo_dir}" == *//* || "${repo_dir}" == */../* || "${repo_dir}" == */.. || "${repo_dir}" == */./* || "${repo_dir}" == */. ]]; then
+   printf '%s\n' "$0: ERROR: REPO_DIR must not contain '//', a '.' or a '..' component: ${repo_dir}" >&2
    exit 1
+fi
+
+## Testability seam: validate REPO_DIR, then exit before the root check and any
+## filesystem action, so test/test-repo-dir-validation.sh can exercise the guard as any
+## user, non-destructively. (A config-only env seam; adversarial env is out of scope.)
+if [ -n "${LOCAL_APT_REPO_VALIDATE_ONLY:-}" ]; then
+   exit 0
 fi
 
 if [ "$(id -u)" -ne 0 ]; then

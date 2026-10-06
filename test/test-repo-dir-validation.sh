@@ -2,17 +2,17 @@
 
 ## Regression test for make-local-apt-repo.sh REPO_DIR validation.
 ##
-## Runs as ANY user: the validated allowlist is a pure string check placed before the
-## root check, so it needs no privileges and touches no filesystem (the script exits
-## at the guard or, for a clean path, at the unrelated root check -- never reaching
-## mkdir/cp/apt).
+## Runs as ANY user and touches no filesystem: it drives the target in validate-only
+## mode (LOCAL_APT_REPO_VALIDATE_ONLY=1), which checks REPO_DIR and exits before the
+## root check and before any mkdir/cp/apt action.
 ##
-## Canary: point it at a pre-validation revision to confirm it goes RED --
+## Canary (prove it is RED on code without the guard): point it at a pre-guard
+## revision and run as a NON-root user --
 ##   git show <pre-guard-rev>:make-local-apt-repo.sh > /tmp/pre.sh
 ##   TARGET_SCRIPT=/tmp/pre.sh bash test/test-repo-dir-validation.sh
-## Assertions key on the guard's error TEXT, not the exit code: a non-root run of an
-## unguarded script still exits non-zero (its "run as root" check), so an exit-only
-## assertion would false-pass on the broken code.
+## That revision lacks the validate-only seam, so it falls through to the root check
+## and a bad path emits "run as root" instead of the guard error -- failing the reject
+## assertions (which key on the guard's error TEXT, not merely a non-zero exit).
 
 set -o errexit
 set -o nounset
@@ -25,23 +25,24 @@ export LC_ALL=C
 script_dir="$(dirname -- "$(realpath -- "$0")")"
 target="${TARGET_SCRIPT:-${script_dir}/../make-local-apt-repo.sh}"
 
-## Emitted only by the two path-validation guards (charset and `//`/`..`).
+## Emitted only by the two path-validation guards (charset and `//`/`.`/`..`); in
+## validate-only mode no other error path is reachable.
 guard_signature='ERROR: REPO_DIR must'
 
 fail_count=0
 out=''
 rc=0
 
-run_target() {
-   ## Capture combined output + exit code without tripping errexit on the expected
-   ## non-zero exit. Sets globals `out` and `rc`.
+run_validate() {
+   ## Validate-only: the target checks REPO_DIR and exits before the root check and any
+   ## filesystem action, so this is safe and uid-independent. Sets globals `out`/`rc`.
    rc=0
-   out="$(bash -- "${target}" "$1" 2>&1)" || rc=$?
+   out="$(LOCAL_APT_REPO_VALIDATE_ONLY=1 bash -- "${target}" "$1" 2>&1)" || rc=$?
 }
 
 expect_reject() {
    local path="$1" label="$2"
-   run_target "${path}"
+   run_validate "${path}"
    if [ "${rc}" -ne 0 ] && [[ "${out}" == *"${guard_signature}"* ]]; then
       printf 'PASS  reject  %s\n' "${label}"
    else
@@ -50,18 +51,18 @@ expect_reject() {
    fi
 }
 
-expect_pass_guard() {
+expect_accept() {
    local path="$1" label="$2"
-   run_target "${path}"
-   if [[ "${out}" == *"${guard_signature}"* ]]; then
-      printf 'FAIL  accept  %s  (path guard fired: %q)\n' "${label}" "${out}" >&2
-      fail_count=$(( fail_count + 1 ))
-   else
+   run_validate "${path}"
+   if [ "${rc}" -eq 0 ]; then
       printf 'PASS  accept  %s\n' "${label}"
+   else
+      printf 'FAIL  accept  %s  (rc=%s, out=%q)\n' "${label}" "${rc}" "${out}" >&2
+      fail_count=$(( fail_count + 1 ))
    fi
 }
 
-## Reject battery: every class the review flagged, plus percent / dotdot / hash / `//`.
+## Reject battery: every class the review flagged, plus percent / dotdot / dot / hash / `//`.
 expect_reject 'myrepo'          'relative path'
 expect_reject '/'               'bare slash'
 expect_reject '/srv/my repo'    'embedded space'
@@ -69,11 +70,16 @@ printf -v newline_path '/srv/x\ndeb [trusted=yes] file:/srv/injected ./'
 expect_reject "${newline_path}" 'newline source injection'
 expect_reject '/srv/a%2e%2e/x'  'percent-encoded'
 expect_reject '/srv/../x'       'dotdot component'
+expect_reject '/.'              'dot collapses to root'
+expect_reject '/./'             'dot-slash collapses to root'
+expect_reject '/srv/./x'        'embedded dot component'
 expect_reject '/srv/a#b'        'hash (apt comment)'
 expect_reject '//srv/x'         'double leading slash'
 
-## A clean absolute path must clear the guard (it then stops at the unrelated root check).
-expect_pass_guard '/srv/myrepo' 'clean absolute path'
+## Clean absolute paths must pass validation (a `.` inside a name is not a component).
+expect_accept '/srv/myrepo'     'clean absolute path'
+expect_accept '/srv/my.repo'    'dot inside a path component'
+expect_accept '/srv/.cache/r'   'leading-dot (hidden) directory'
 
 if [ "${fail_count}" -ne 0 ]; then
    printf '\n%s: FAIL: %s assertion(s) failed\n' "$0" "${fail_count}" >&2
