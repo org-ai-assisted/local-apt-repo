@@ -61,8 +61,9 @@ fi
 
 ## Testability seam: validate REPO_DIR, then exit before the root check and any
 ## filesystem action, so test/test-repo-dir-validation.sh can exercise the guard as any
-## user, non-destructively. (A config-only env seam; adversarial env is out of scope.)
-if [ -n "${LOCAL_APT_REPO_VALIDATE_ONLY:-}" ]; then
+## user, non-destructively. Activated ONLY by the literal value 1, so an inherited
+## `=0`/`=false` ("disabled") cannot silently turn a real run into a success no-op.
+if [ "${LOCAL_APT_REPO_VALIDATE_ONLY:-}" = 1 ]; then
    exit 0
 fi
 

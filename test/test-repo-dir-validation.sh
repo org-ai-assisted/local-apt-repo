@@ -81,6 +81,22 @@ expect_accept '/srv/myrepo'     'clean absolute path'
 expect_accept '/srv/my.repo'    'dot inside a path component'
 expect_accept '/srv/.cache/r'   'leading-dot (hidden) directory'
 
+## The seam activates ONLY on the literal value 1, so an inherited `=0` ("disabled")
+## cannot turn a real run into a success no-op. Observable only by letting a clean path
+## fall through past the seam, which needs a non-root run; skip (honestly) under root.
+if [ "$(id -u)" -ne 0 ]; then
+   rc=0
+   out="$(LOCAL_APT_REPO_VALIDATE_ONLY=0 bash -- "${target}" /srv/myrepo 2>&1)" || rc=$?
+   if [ "${rc}" -ne 0 ] && [[ "${out}" != *"${guard_signature}"* ]]; then
+      printf 'PASS  seam-gate  LOCAL_APT_REPO_VALIDATE_ONLY=0 does not no-op\n'
+   else
+      printf 'FAIL  seam-gate  =0 wrongly activated the seam (rc=%s, out=%q)\n' "${rc}" "${out}" >&2
+      fail_count=$(( fail_count + 1 ))
+   fi
+else
+   printf 'SKIP  seam-gate  (run as root; needs a non-root fall-through)\n'
+fi
+
 if [ "${fail_count}" -ne 0 ]; then
    printf '\n%s: FAIL: %s assertion(s) failed\n' "$0" "${fail_count}" >&2
    exit 1
