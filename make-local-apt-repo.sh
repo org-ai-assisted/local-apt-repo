@@ -41,22 +41,24 @@ umask 022
 repo_dir="${1:-/srv/myrepo}"
 shift || true
 
-if [ "$(id -u)" -ne 0 ]; then
-   printf '%s\n' "$0: ERROR: run as root (writes ${repo_dir} and /etc/apt/sources.list.d)." >&2
-   exit 1
-fi
-
 ## REPO_DIR lands verbatim in a file: URI on a one-line sources.list entry, and apt
 ## percent-decodes it. Restrict to a safe absolute path -- leading slash, only
 ## [A-Za-z0-9._/-], no `//` or `..` component. This rejects whitespace and newlines
 ## (source injection), `%` (percent-decode traversal PAST the ownership check below),
 ## `#` (apt comment -> malformed entry), and a `//` prefix (invalid file: URI).
+## A pure string check with no privilege or filesystem dependency, so it runs before
+## the root check and is exercisable standalone (test/test-repo-dir-validation.sh).
 if [[ ! "${repo_dir}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
    printf '%s\n' "$0: ERROR: REPO_DIR must be an absolute path using only [A-Za-z0-9._/-]: ${repo_dir}" >&2
    exit 1
 fi
 if [[ "${repo_dir}" == *//* || "${repo_dir}" == */../* || "${repo_dir}" == */.. ]]; then
    printf '%s\n' "$0: ERROR: REPO_DIR must not contain '//' or a '..' component: ${repo_dir}" >&2
+   exit 1
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+   printf '%s\n' "$0: ERROR: run as root (writes ${repo_dir} and /etc/apt/sources.list.d)." >&2
    exit 1
 fi
 
